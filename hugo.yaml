@@ -1,0 +1,24 @@
+baseURL: https://example.org/
+languageCode: zh-cn
+title: "Wiv Log"
+theme: ["PaperMod"]
+
+menu:
+  main:
+    - name: Archive
+      url: archives
+    - name: FAQ
+      url: faq
+
+params:
+  homeInfoParams:
+    Title: wivl 的博客
+    Content: "👋 Hi, 我是 wivl (读作 /ˈwiːvl/，即 weevil)。我想把我的学习笔记以博客文章的形式存档在这里。文章的主题可能涵盖任何我感兴趣的方向: Modern C++、计算机图形学/渲染、游戏开发，以及我感兴趣的其他内容。"
+    defaultTheme: auto
+    buttons:
+      - name: Archive
+        url: "/archive"
+
+  socialIcons: # optional
+    - name: "github"
+      url: "https://github.com/wivl"
