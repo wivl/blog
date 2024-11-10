@@ -13,7 +13,9 @@ menu:
 params:
   homeInfoParams:
     Title: wivl 的博客
-    Content: "👋 Hi, 我是 wivl (读作 /ˈwiːvl/，即 weevil)。我想把我的学习笔记以博客文章的形式存档在这里。文章的主题可能涵盖任何我感兴趣的方向: Modern C++、计算机图形学/渲染、游戏开发，以及我感兴趣的其他内容。"
+    Content: > 
+      👋 Hi, 我是 wivl (读作 /ˈwiːvl/，即 weevil)。我想把我的学习笔记以博客文章的形式存档在这里。文章的主题可能涵盖任何我感兴趣的方向: Modern C++、计算机图形学/渲染、游戏开发，以及我感兴趣的其他内容。
+
     defaultTheme: auto
     buttons:
       - name: Archive
@@ -21,4 +23,10 @@ params:
 
   socialIcons: # optional
     - name: "github"
+      title: Github Profile
       url: "https://github.com/wivl"
+
+
+# 配置见：
+#  - [PaperMode 主题](https://github.com/adityatelange/hugo-PaperMod)
+#  - [示例网页](https://github.com/adityatelange/hugo-PaperMod)
