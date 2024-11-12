@@ -2,11 +2,11 @@
 title: "合理地管理一个 modern cpp 项目"
 summary: "用现代的方式管理自己的 cpp 项目，包括创建、Build、测试、依赖管理等"
 author: ["wivl"]
-date: 2024-11-11
+date: 2024-11-13
 tags: ["cpp"]
 weight: 1
 ShowToc: true
-draft: false
+draft: true
 ---
 
 > 未完成
