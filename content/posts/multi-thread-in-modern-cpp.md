@@ -2,7 +2,7 @@
 title: "Modern C++ 中的多线程"
 summary: "Modern C++ 多线程原理和线程池实现"
 author: ["wivl"]
-date: 2024-11-12
+date: 2024-11-11
 tags: ["cpp"]
 weight: 1
 ShowToc: true
