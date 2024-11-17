@@ -4,11 +4,11 @@ url: "/about/"
 summary: About
 ---
 
-和我有关的事情
+和我有关的事情。
 
 ### 我是谁
 
-- 一位来自中国开发者
+- 一位来自中国的开发者
 - 双非本科学历
 - 感兴趣的方向是计算机图形学/渲染和游戏开发
 - 曾经是 [freeCodeCamp](https://freeCodeCamp.org) 的贡献者，目前不活跃
