@@ -416,7 +416,7 @@ cmake_layout
 CMakeDeps
 ```
 
-3. 修改 `CMakeLists.txt` 和 `CMakePresets.json`。还记得我们在第一步从 `cmake-conan` 仓库拷贝过来的 `conan_provider.cmake` 文件吗。这是一个 CMake 模块文件，里面定义了 Conan 包管理器与 CMake 交互的各种宏和函数。简单来说，`conan_provider.cmake` 重新定义了 CMake 的 `find_package()` 函数。当用户在 `CMakeLists.txt` 里面使用 `find_package()` 函数的时候会调用 Conan 的实现。Conan 会在这里施一些“魔法”。使得开发者不需要显式执行 Conan 命令。要做到这一点，只需要定义 `CMAKE_PROJECT_TOP_LEVEL_INCLUDES` 为 `conan_provider.cmake`。由于我们的项目使用了 CMakePresets，这个步骤就很方便。修改 `CMakePresets.json` 里的 `configurePresetsa` 为：
+3. 修改 `CMakeLists.txt` 和 `CMakePresets.json`。还记得我们在第一步从 `cmake-conan` 仓库拷贝过来的 `conan_provider.cmake` 文件吗。这是一个 CMake 模块文件，里面定义了 Conan 包管理器与 CMake 交互的各种宏和函数。简单来说，`conan_provider.cmake` 重新定义了 CMake 的 `find_package()` 函数。当用户在 `CMakeLists.txt` 里面使用 `find_package()` 函数的时候会调用 Conan 的实现。Conan 会在这里施一些“魔法”。使得开发者不需要显式执行 Conan 命令。要做到这一点，只需要定义 `CMAKE_PROJECT_TOP_LEVEL_INCLUDES` 为 `conan_provider.cmake`。由于我们的项目使用了 CMake Presets，这个步骤就很方便。修改 `CMakePresets.json` 里的 `configurePresets` 为：
 
 ```json
 "configurePresets": [
