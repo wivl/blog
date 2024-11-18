@@ -1,6 +1,6 @@
 ---
 title: "构建自己的现代 C++ 工作流程"
-summary: "探讨如何基于 CMake + Conan2 构建高效的 C++ 工作流，包括构建和依赖管理。"
+summary: "探讨如何基于 CMake + Conan2 构建高效的 C++ 工作流，包括构建、依赖管理和测试。"
 author: ["wivl"]
 date: 2024-11-16
 tags: ["cpp"]
@@ -27,7 +27,7 @@ draft: false
 
 老实说，这些构建工具相对于 CMake 都多多少少有一定的可取之处。既然这样，我为什么要使用 CMake？理由很简单：因为大多数 C++ 开发者都在使用 CMake。当你在 Github 里浏览的 C++ 项目，你会发现无论是库还是可执行文件，它们很有可能使用的就是 CMake。换言之 CMake 具有最庞大的社区，当所有人都在使用 CMake 时，我们最好也使用 CMake，以获得最好的社区支持。
 
-但同时我们不得不承认 CMake 存在一些问题。首先和 C++ 一脉相承的是，CMake 是一个具有历史底蕴的构建工具，不同的项目，哪怕都使用 CMake 作为构建工具，它们的实现方法和项目文件的组织方式可能完全不同。我试图在这些项目的组织方法中找到一种方便的、现代的方式来管理源文件、第三方依赖，建立自己的工作流。
+但同时我们不得不承认 CMake 存在一些问题。首先和 C++ 一脉相承的是，CMake 是一个具有历史底蕴的构建工具，不同的项目，哪怕都使用 CMake 作为构建工具，它们的实现方法和项目文件的组织方式可能完全不同。我试图在这些项目的组织方法中找到一种方便的、现代的方式来管理源文件、第三方依赖以及单元测试，建立自己的工作流。
 
 ## 项目架构
 
@@ -473,9 +473,180 @@ cmake --workflow --preset windows
 如果上面的设置无误的话每次运行 CMake 工作流应该都会同步第三方库。我们不需要执行任何一条 `conan install .` 命令！
 
 
+## 测试
+
+测试是项目中重要但是很容易忽视的一步。对于本文采用了 `Core-App Architecture` 的项目来说，我们很容易想到需要给 Core 中的库函数编写测试。关于测试文件的组织，有的人喜欢**在项目根目录创建 `tests` 文件夹，集中存放测试源文件**，也有的直接**在库文件夹里创建测试**。两种做法都各有道理，怎么选全凭个人喜好。我在这里选择后者，读者如果想尝试第一种，在理解 CMake 组织子文件的原理后不难举一反三。
+
+### CMake 结合 GTest
+
+我们使用第三方库 `GTest` 来简化我们的测试流程。由于我们已经设置好了 Conan2，获取 GTest 只需要在 conanfile.txt 里添加 GTest 依赖：
+
+```
+[requires]
+fmt/9.1.0
+gtest/1.15.0
+
+[layout]
+cmake_layout
+
+[generators]
+CMakeDeps
+CMakeToolchain
+```
+
+在 `module1` 目录下创建子文件夹 `tests`，然后在 `tests` 里创建 `CMakeLists.txt` 和测试源文件 `tests.cpp`。现在 `module1` 看起来像这样：
+
+```
+─module1
+    │  CMakeLists.txt
+    │
+    ├─include
+    │  └─module1
+    │          header.hpp
+    │
+    ├─src
+    │  └─module1
+    │          source.cpp
+    │
+    └─tests
+            CMakeLists.txt
+            tests.cpp
+```
+
+
+根据先前的经验，创建了子文件夹就应该创建对应的 CMakeLists.txt。tests 目录的 CMakeLists.txt 内容如下：
+
+```cmake
+# core/module1/tests/CMakeLists.txt
+project(tests)
+
+add_executable(${PROJECT_NAME}
+    tests.cpp
+)
+
+find_package(Gtest REQUIRED)
+
+
+target_link_libraries(${PROJECT_NAME}
+    PRIVATE
+        core::module1
+        GTest::gtest_main
+)
+
+include(GoogleTest)
+gtest_discover_tests(${PROJECT_NAME})
+```
+
+并添加 tests 目录为 subdirectory：，只需修改 module1 目录的 CMakeLists.txt，添加一行：
+
+```cmake
+project(module1)
+
+add_library(${PROJECT_NAME}
+    src/module1/source.cpp
+)
+add_library(core::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
+
+target_include_directories(${PROJECT_NAME}
+    PUBLIC
+        $<INSTALL_INTERFACE:include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_features(${PROJECT_NAME}
+    PRIVATE
+        cxx_std_17
+)
+
+# 在末尾添加子目录
+add_subdirectory(tests)
+```
+
+现在我们可以编写测试代码了。在这个例子中，我们需要验证 `module1::sum` 函数能不能正确地计算 `1 + 1`。
+
+```cpp
+// core/module1/tests/tests.cpp
+#include <gtest/gtest.h>
+#include <module1/header.hpp>
+
+TEST(Module1, sum) {
+    EXPECT_EQ(module1::sum(1, 1), 2);
+}
+```
+
+文件的内容很简单，include 需要的头文件，然后编写单元测试。我们不需要给这个可执行文件创建 main 函数，因为 TEST 宏已经帮我们这么做了。要运行测试，我们只需要构建项目，然后运行 tests.exe。终端的输出应该如下：
+
+```
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from Module1
+[ RUN      ] Module1.sum
+[       OK ] Module1.sum (0 ms)
+[----------] 1 test from Module1 (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+```
+
+### Test Presets
+
+现在需要每次手动运行测试，我们当然不会满足于此。之前提到过，CMake presets 支持 test presets 的配置，这个配置告诉 CMake 如何运行测试。CMake 在安装的时候附带了一个测试工具 `CTest`。和 CMake 一样，可以给 CTest 指定 `--preset` 参数。但是先让我们在 `CMakePresets.json` 里添加一个默认的 test preset：
+
+```json
+...
+"testPresets": [
+    {
+        "name": "default",
+        "displayName": "Run All Tests",
+        "description": "Run all tests with CTest",
+        "configurePreset": "default"
+    }
+],
+"workflowPresets": [
+    {
+        "name": "windows",
+        "steps": [
+            {
+                "type": "configure",
+                "name": "default"
+            },
+            {
+                "type": "build",
+                "name": "windows"
+            },
+            {
+                "type": "test",
+                "name": "default"
+            }
+        ]
+    }
+]
+```
+
+上面添加的 json 片段创建了一个 test preset，然后再 workflow 里添加了这一步骤。这个 preset 基本什么都没做，但是相信我，这足够让 CTest 知道自己要干什么：
+
+```
+cmake --workflow --preset windows
+```
+
+现在 CMake 应该会重新构建项目，然后运行测试。至此，我们的 CMake 工作流已经包含了本地库管理（core）、第三方库管理（Conan）、构建和测试（GTest）。
+
+
 ## 总结
 
-创建项目是开始一个项目的第一步，这篇文章也是我的博客的第一篇。研究这个课题花费了我将近一周的时间，收集了多方的资料，尝试了多种工具链，最后找到了适合自己的工具链。但是这篇博客其实还没有完成。我在创建 CMake 工作流的时候跳过了测试的部分，但是我在研究这个课题的时候经常可以听见那些有经验的开发者强调编写测试的重要性。但是很不幸的是，测试是我从来没有接触过的内容。我应该会在之后补充测试相关的内容。
+聪明的读者可能已经发现了，这套工作流程无非是：
+
+> 1. 用 add_subdirectory() 组织文件
+> 2. 使用包管理器管理项目，并融合进 CMake 工具链
+> 3. 编写测试
+> 4. 将以上 2、3 步骤用 CMake presets 集成从而做到自动化
+
+至于项目的结构、使用什么包管理器、使用什么测试用具等都是个人喜好问题，万变不离其宗。
+
+创建项目是开始一个项目的第一步，这篇文章也是我的博客的第一篇。研究这个课题花费了我将近一周的时间，收集了多方的资料，尝试了多种解决方案，最后找到了适合自己的工具链。
 
 在发布这篇文章的同时，我也将我在文章中使用的模板分享到 [GitHub](https://github.com/wivl/cpp-template) 上了，读者可以参考源码，或者直接使用这个模板。
 
@@ -493,3 +664,5 @@ cmake --workflow --preset windows
 [5][cmake-presets Document](https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html)
 
 [6][How to Use Modern CMake for an App + Lib Project](https://rvarago.github.io/2018-08-20-how-to-use-modern-cmake-for-an-app-p-lib-project/)
+
+[7][Do you even test? (your code with CMake)](https://www.youtube.com/watch?v=pxJoVRfpRPE)
