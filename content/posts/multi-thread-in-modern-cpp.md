@@ -15,11 +15,8 @@ draft: false
 
 自从 C++11 开始，C++ 标准库提供了跨平台的多线程设施。这意味着 C++ 开发者在编写多线程应用的时候不再需要为每一个操作系统使用特定的库，编写特定的代码。
 
-我将在本篇文章探讨 C++17 多线程标准库的应用，并且在最后实现一个线程池。
+我将在本篇文章探讨 C++17 多线程标准库的应用，并且在最后实现一个线程池。本文面向那些对多线程原理有一定的了解，但是从来没有使用任何语言上手实现过相关内容，或者单纯想了解 C++17 标准如何编写多线程代码的读者。
 
-## 多线程原理
-
-> TODO: 
 
 ## 头文件
 
@@ -32,7 +29,7 @@ C++17 有以下几个与多线程相关的头文件：
 |\<condition_variable\>|提供条件变量，用于线程同步|C++11|
 |\<future\>|提供异步任务、`std::future`，`std::promise` 等|C++11|
 |\<atomic\>|提供原子操作支持，`std::atomic` 和 `std::atomic_flag`|C++11|
-|\<shared_mutex\>|提供读写锁 `std::shared_mutex`，`std::shared_lock`|C++17|
+|\<shared_mutex\>|提供读写锁 `std::shared_mutex`，`std::shared_lock`|C++14|
 
 
 ## 线程
@@ -368,19 +365,440 @@ int main() {
 }
 ```
 
-## atomic
+1. 定义全局 `std::recursive_timed_mutex`；
 
-`<atomic>` 头文件包含原子类型。原子类型用于在多线程环境中执行线程安全的操作，避免了使用互斥锁。它保证了对共享变量的操作不会被中断或干扰。原子操作时不可分割的操作，要么完全执行，要么完全不执行，不会被线程切断或中断。
+2. 尝试在 100ms 内获得锁，如果成功返回 `true`，否则返回 `false`；
 
-## condition_variable
+3. 递归调用任务函数，需要重入锁；
 
-`<condition_variable>` 头文件主要包含条件变量（condition variable）相关的类和函数。条件变量是一种同步机制，用于在线程之间进行信号传递。它允许一个线程在某些条件下等待，而另一个线程在条件满足时通知等待的线程继续执行。
+4. 需要手动解锁；
+
+5. 100ms 内未获得锁。
+
+### std::shared_mutex
+
+`std::shared_mutex` 在 C++17 标准中被引用，定义在头文件 `<shared_mutex>` 中。`std::shared_mutex` 支持共享锁（shared_mutex）和独占锁（unique_mutex）。共享锁允许多个线程同时获取，而独占锁同时只可以有一个线程获取。
+
+考虑`reader-writer`问题：对于一个共享资源，可能有多个 reader 线程和多个 writer 线程。reader 线程可以同时读取资源，writer 线程只有在没有 reader 线程读取，并且没有其他 writer 线程写入的时候写入。在下面这段代码的例子中，reader 线程获取一个全局变量的值并输出，writer 线程让这个全局变量递增。
+
+```cpp
+#include <iostream>
+#include <thread>
+// 1
+#include <shared_mutex>
+
+// 2
+std::shared_mutex smtx;
+// 3
+int shared_data = 0;
+
+void reader(int id) {
+    // 4
+    std::shared_lock<std::shared_mutex> lock(smtx);  // 共享锁
+    std::cout << "Reader " << id << " reading data: " << shared_data << std::endl;
+}
+
+void writer(int id) {
+    // 5
+    std::unique_lock<std::shared_mutex> lock(smtx);  // 独占锁
+    ++shared_data;
+    std::cout << "Writer " << id << " updated data to: " << shared_data << std::endl;
+}
+
+int main() {
+    std::thread t1(reader, 1);
+    std::thread t2(writer, 1);
+    std::thread t3(reader, 2);
+
+    t1.join();
+    t2.join();
+    t3.join();
+
+    return 0;
+}
+```
+
+1. `std::shared_mutex` 包含在头文件 `<shared_mutex>` 中；
+
+2. 定义全局 `std::shared_mutex`；
+
+3. 定义共享全局 int 变量；
+
+4. reader 线程获取共享锁，这里直接使用 C++17 标准建议的 `std::shared_lock` 方式上锁，定义局部变量 `lock`，在作用域内无需手动上锁和解锁。这种方式将在稍后提及；
+
+5. write 线程获取独占锁。
+
+### std::shared_timed_mutex
+
+`std::shared_timed_mutex` 相比 `std::shared_mutex` 支持超时尝试加锁，适用于对锁获取时间有要求的场景。
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <shared_mutex>
+#include <chrono>
+
+std::shared_timed_mutex stm;
+int shared_data = 0;
+
+void reader(int id) {
+    if (stm.try_lock_shared_for(std::chrono::milliseconds(100))) {  // 尝试共享锁
+        std::cout << "Reader " << id << " reading data: " << shared_data << std::endl;
+        stm.unlock_shared();
+    } else {
+        std::cout << "Reader " << id << " failed to acquire shared lock.\n";
+    }
+}
+
+void writer(int id) {
+    if (stm.try_lock_for(std::chrono::milliseconds(100))) {  // 尝试独占锁
+        ++shared_data;
+        std::cout << "Writer " << id << " updated data to: " << shared_data << std::endl;
+        stm.unlock();
+    } else {
+        std::cout << "Writer " << id << " failed to acquire lock.\n";
+    }
+}
+
+int main() {
+    std::thread t1(reader, 1);
+    std::thread t2(writer, 1);
+    std::thread t3(reader, 2);
+
+    t1.join();
+    t2.join();
+    t3.join();
+
+    return 0;
+}
+```
+
+这个例子与之前的例子类似，无需过多解释。
+
+### RAII 管理互斥锁
+
+熟悉 C++ 的读者应该也对 RAII 很熟悉。RAII 是 **Resource Acquisition Is Initialization** 的缩写，直译为**资源获取即初始化**，是贯彻现代 C++ 资源管理思想。RAII 要求，资源的有效期与持有资源的对象的生命周期绑定，即*由构造函数完成资源的分配，由析构函数完成资源的释放*。
+
+在互斥锁的应用场景中，RAII 的做法实际上是利用 C++ 对象的生命周期。我们使用一个容器将锁包裹，当需要获取锁时创建对象，调用构造函数，自动上锁；当该容器生命周期结束时调用析构函数，自动解锁。在介绍 `std::shared_mutex` 的例子中的 `std::shared_lock` 和 `std::unique_lock` 就使用了这个原理。
+
+C++ 标准建议使用 RAII 管理互斥锁。`<mutex>` 和 `<shared_mutex>` 库中提供了多种 RAII 工具用来管理互斥锁。
+
+|设施|功能|头文件|C++ 标准|
+|----|---|-----|-------|
+|std::lock_guard|最基础的 RAII 管理类，自动加锁和解锁，不能手动解锁|\<mutex\>|C++11|
+|std::unique_lock|std::lock_guard 的升级版，支持延迟加锁（即创建变量时不锁定），随时手动加锁解锁，以及超时锁功能|\<mutex\>|C++11|
+|std::scoped_lock|同时管理多个互斥锁，防止死锁，构造时自动加锁所有互斥锁，析构时解锁|\<mutex\>|C++11|
+|std::shared_lock|管理共享锁，用于 std::shared_mutex 和 std::shared_timed_mutex，支持延迟加锁等功能，支持多个线程同时加共享锁，但只有一个线程可以加独占锁|\<shared_mutex\>|C++14|
+
+下面这段代码演示了如何使用这几个类。
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <mutex>
+#include <chrono>
+
+std::mutex mtx;
+
+// 示例 1
+// std::lock_guard，模板类，接受 std::mutex 为锁类型，使用全局变量 mtx 作为构造函数参数
+void task1(int id) {
+    std::lock_guard<std::mutex> lock(mtx);  // 创建对象自动加锁
+    std::cout << "Thread " << id << " is working.\n";
+    // 作用域结束，自动解锁
+}
+
+
+// 示例 2
+// std::unique_lock，在这个例子中使用 std::timed_mutex 延迟加锁
+std::timed_mutex tmtx;
+
+void task2(int id) {
+    std::unique_lock<std::timed_mutex> lock(tmtx, std::defer_lock);  // 延迟加锁，允许后面尝试获得锁，也可以不使用 std::defer 参数，直接加锁
+    if (lock.try_lock_for(std::chrono::milliseconds(100))) {  // 尝试在100ms内加锁
+        std::cout << "Thread " << id << " acquired the lock.\n";
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));  // 模拟工作
+    } else {
+        std::cout << "Thread " << id << " could not acquire the lock.\n";
+    }
+}
+
+
+// 示例 3
+// std::scoped_lock，自动同时加多个互斥锁
+std::mutex mtx1, mtx2;
+
+void task3() {
+    std::scoped_lock lock(mtx1, mtx2);  // 自动同时加锁多个互斥锁
+    std::cout << "Task 3 is working.\n";
+}
+
+// 示例 4
+// std::shared_mutex，我们已经在上面 shared_mutex 的 reader-writer 例子见过了
+```
+
+通过选择适合的 RAII 工具，可以简化锁的管理，避免手动加锁和解锁的错误，提高代码的安全性和可维护性。
+
+值得注意的是，上面举得例子知识冰山一角。关于这几个锁其他用法请参考文档，本文末尾也列出了我在编写这篇文章时参考的其他内容。
+
+
+## 条件变量
+
+`<condition_variable>` 头文件主要包含条件变量（condition variable）相关的类和函数。条件变量是一种同步机制，用于在线程之间进行信号传递。它允许一个线程在某些条件下等待，而另一个线程在条件满足时通知等待的线程继续执行。我将着重介绍 `std::condition_variable`，头文件里还包含 `std::condition_variable_any` 类，相比前者更加灵活，其用法还请读者自行探索。
+
+### std::condition_variable
+
+`std::condition_variable` 的主要功能是让一个或多个线程等待某个条件成立，通过 `notify_one` 或 `notify_all` 唤醒等待线程。适用场景为：当线程需要等待某种条件，例如数据准备好、某个任务完成等。使用条件变量需要配合互斥锁使用，确保等待条件时的线程安全。
+
+`std::condition_variable` 有两类常用成员函数：**等待函数**和**通知函数**。
+
+|等待函数|用法|
+|------|----|
+|wait(std::unique_lock\<std::mutex\>& lock)|释放锁并阻塞线程，直到收到通知或条件满足时被唤醒；唤醒后，线程会重新获取并继续运行|
+|wait(std::unique_lock\<std::mutex\>& lock, Predicate pred)|和上面的函数类似，但提供一个“谓词” pred，只有当 pred 返回 true 时，线程才会继续执行|
+|wait_for()、wait_until()|除了等待通知外，还可以设置超时时间|
+
+
+|通知函数|用法|
+|------|----|
+|`notify_one()`|唤醒一个正在等待的线程，如果没有线程在等待，则无效果|
+|`notify_all()`|唤醒所有正在等待的线程，确保公平竞争|
+
+
+用一个生产者-消费者的例子来说明它的使用方法。
+
+```cpp
+#include <iostream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <chrono>
+
+std::mutex mtx;
+std::condition_variable cv;
+std::queue<int> buffer;
+const int maxSize = 10;
+
+// 生产者函数：如果缓冲区已满（buffer.size() >= maxSize），调用 cv.wait 阻塞，知道缓冲区有空间
+// 生产一个数据后，通过 cv.notify_all 通知消费者数据可用
+void producer(int id) {
+    int item = 0;
+    while (item < 20) {
+        // 使用 unique_lock 保护 buffer，避免竞争条件
+        std::unique_lock<std::mutex> lock(mtx);
+        // 调用 wait 方法，先释放锁，使得其他线程可以访问共享资源
+        // 当被唤醒后，wait 会自动重新获取锁，确保被唤醒的线程能安全地检查条件
+        cv.wait(lock, [] { return buffer.size() < maxSize; }); // 等待空间可用
+        
+        buffer.push(item);
+        std::cout << "Producer " << id << " produced: " << item << std::endl;
+        item++;
+        
+        cv.notify_all(); // 通知消费者
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // 模拟生产耗时
+    }
+}
+
+// 消费者函数：如果缓冲区为空（buffer.empty()），调用 cv.wait 阻塞，直到缓冲区有数据
+// 消费一个数据后，通过 cv.notify_all 通知生产者可以继续生产
+void consumer(int id) {
+    while (true) {
+        // 使用 unique_lock 保护 buffer，避免竞争条件
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [] { return !buffer.empty(); }); // 等待数据可用
+        
+        int item = buffer.front();
+        buffer.pop();
+        std::cout << "Consumer " << id << " consumed: " << item << std::endl;
+        
+        cv.notify_all(); // 通知生产者
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150)); // 模拟消费耗时
+    }
+}
+
+int main() {
+    std::thread p1(producer, 1);
+    std::thread p2(producer, 2);
+    std::thread c1(consumer, 1);
+    std::thread c2(consumer, 2);
+    
+    p1.join();
+    p2.join();
+    c1.detach(); // 消费者在生产结束后继续消费剩余的数据
+    c2.detach();
+
+    return 0;
+}
+```
+
+`wait` 方法带谓词的版本被更广泛地使用，因为如果使用第一种不带谓词的 wait 方法而不反复检查条件的话，可能会造成*虚假唤醒（spurious wakeup）*。
+
+考虑一种可能发生的情况：假设存在多个消费者线程阻塞等待，生产者调用 `notify_*` 方法通知阻塞的消费者线程。即使某个消费者线程的条件在调用 `notify_*` 时是满足的，另一个线程可能在当前线程被唤醒并重新获取锁之前改变了共享资源的状态，导致条件不再满足。因此，在多线程环境中，条件变量等待的核心规则是等待线程自己检查条件是否满足，而不能完全依赖 `notify_*` 的调用。也因此，`wait` 方法通常需要一个谓词函数来重复检查条件。
+
 
 ## future
 
-`<future>` 头文件提供了异步机制。
+`<future>` 头文件用于支持异步操作和线程间通信。它提供了一系列工具类和函数，允许线程安全地获取异步计算的结果。头文件组要提供了以下设施：
+
+|主要类|用途|C++ 标准|
+|-----|---|--------|
+|std::future|用于获取异步任务的结果|C++11|
+|std::promise|用于设置共享状态，配合 std::future 使用|C++11|
+|std::shared_future|允许多个线程共享一个异步结果|C++11|
+|std::packaged_task|将一个可调用对象与共享状态绑定|C++11|
+
+
+|主要函数|用途|C++ 标准|
+|-----|---|--------|
+|std::async|启动一个异步任务并返回 std::future|C++11|
+
+
+我将通过一些例子展示上述设施的用法。
+
+### std::future & std::async
+
+
+```cpp
+#include <iostream>
+#include <future>
+#include <thread>
+
+// 需要异步执行的任务
+int compute() {
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    return 42;
+}
+
+int main() {
+    // std::async 返回 std::future<int>，模板类型取决于异步任务的返回类型
+    std::future<int> result = std::async(std::launch::async, compute);
+    
+    std::cout << "Waiting for result...\n";
+    int value = result.get(); // 阻塞直到任务完成
+    std::cout << "Result: " << value << "\n";
+
+    return 0;
+}
+```
+
+`std::future` 可以简单地理解为一个“占位符变量”，当某个函数返回一个 `std::future` 时，并不意味着该变量已经得到了一个值。只有调用 `future` 的 `get()` 方法时才尝试获得这个值。std::async 的作用是启动一个异步任务，之后主线程继续执行而**不阻塞等待返回结果**。
+
+在这个例子中，`compute()` 任务在调用 `std::async()` 后执行，并需要等待两秒才会返回值，而主线程两秒内大概率已经执行到包含 `get()` 的语句了，所以主线程在 `get()` 阻塞直到获得返回值。
+
+`std::async` 可选择两种启动模式：
+
+|模式|作用|
+|---|----|
+|std::launch::async|在新线程中执行任务（默认）|
+|std::launch::deferred|在调用 get() 时延迟执行任务|
+
+
+
+### std::promise
+
+```cpp
+#include <iostream>
+#include <future>
+#include <thread>
+
+void producer(std::promise<int> p) {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    p.set_value(42); // 设置值
+    // 可以继续做其他事情
+}
+
+void consumer(std::future<int> f) {
+    // 可以先做其他事情
+    int value = f.get(); // 获取值
+    std::cout << "Received: " << value << "\n";
+}
+
+int main() {
+    std::promise<int> p;
+    std::future<int> f = p.get_future();
+
+    std::thread t1(producer, std::move(p));
+    std::thread t2(consumer, std::move(f));
+
+    t1.join();
+    t2.join();
+
+    return 0;
+}
+```
+
+`std::promise` 往往需要配合 `std::future` 使用。之前使用 `std::async` 的做法是将任务函数返回作为 std::future 获得值的时间点。配对使用 std::future 和 std::promise 使得线程间可以通过赋值进行值的获取。
+
+在这个例子中，主线程分别定义 `std::promise` 和 `std::future` 对象并绑定。producer 线程通过调用 `std::promise` 的 `set_value()` 方法设置值。consumer 线程通过调用 `std::future` 的 `get()` 方法获得值。
+
+### std::shared_future
+
+相比 `std::future`，`std::shared_future` 允许多个线程共享异步结果，`std::shared_future` 的 `get()` 方法可以多次调用。
+
+```cpp
+#include <iostream>
+#include <future>
+#include <thread>
+
+int compute() {
+    return 42;
+}
+
+int main() {
+    std::future<int> result = std::async(std::launch::async, compute);
+    std::shared_future<int> shared_result = result.share(); // 转换为 shared_future
+
+    auto worker = [shared_result]() {
+        std::cout << "Shared result: " << shared_result.get() << "\n";
+    };
+
+    std::thread t1(worker);
+    std::thread t2(worker);
+
+    t1.join();
+    t2.join();
+
+    return 0;
+}
+```
+
+### std::packaged_task
+
+`std::packaged_task` 将可调用对象包装为任务，并将其与共享状态绑定。读者如果理解了上面的例子应该很容易就能看懂下面的例子。
+
+```cpp
+#include <iostream>
+#include <future>
+#include <thread>
+
+int compute(int x) {
+    return x * 2;
+}
+
+int main() {
+    std::packaged_task<int(int)> task(compute);
+    std::future<int> result = task.get_future();
+
+    std::thread t(std::move(task), 21); // 启动任务
+    t.join();
+
+    std::cout << "Result: " << result.get() << "\n";
+
+    return 0;
+}
+```
+
 
 ## 线程池
+
+什么是线程池？为什么我们需要线程池？
+
+如果读者恰好熟悉游戏开发，应该也听说过对象池这个概念。在游戏开发中，我们需要创建对象和消除对象。例如敌人生成的时候需要创建对象，敌人死亡的时候需要销毁对象。有时候这样的生成和销毁会很频繁，比如弹幕游戏里的子弹，或者是某种粒子效果的播放。频繁地生成和销毁对象的开销可能造成一些性能问题。对象池解决了这个问题。对象池事先创建若干个对象，在需要生成对象的时候将对象池里的对象移动到对应的位置重置并设置为可见即可；当需要销毁对象的时候只需要设置其可见性或者将对象移动到摄像机看不到的地方，而不用真的销毁它。
+
+线程池的概念也类似，通过提前创建若干个线程，在需要执行任务的时候直接从池子里拿来用，用完的线程回收进池子，减少创建和销毁线程的开销。
 
 ### 线程池如何工作
 
@@ -391,3 +809,5 @@ int main() {
 - [C++多线程详解](https://github.com/0voice/cpp_backend_awsome_blog/blob/main/%E3%80%90NO.610%E3%80%91C%2B%2B%E5%A4%9A%E7%BA%BF%E7%A8%8B%E8%AF%A6%E8%A7%A3%EF%BC%88%E5%85%A8%E7%BD%91%E6%9C%80%E5%85%A8%EF%BC%89.md)
 
 - [C++ 并发编程](https://paul.pub/cpp-concurrency/)
+
+- [RAII, 维基百科词条](https://zh.wikipedia.org/wiki/RAII)
