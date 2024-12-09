@@ -1,6 +1,6 @@
 ---
-title: "Modern C++ 中的多线程"
-summary: "Modern C++ 多线程原理和线程池实现"
+title: "C++17 多线程入门到线程池实现"
+summary: "介绍基于 C++17 的多线程，并且最后实现一个简单的线程池"
 author: ["wivl"]
 date: 2024-12-03
 tags: ["cpp"]
