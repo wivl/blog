@@ -9,8 +9,6 @@ ShowToc: true
 draft: false
 ---
 
-> 未完成
-
 ## 前言
 
 自从 C++11 开始，C++ 标准库提供了跨平台的多线程设施。这意味着 C++ 开发者在编写多线程应用的时候不再需要为每一个操作系统使用特定的库，编写特定的代码。
@@ -802,7 +800,221 @@ int main() {
 
 ### 线程池如何工作
 
+线程池一般包含以下几个部分：
+
+1. 线程容器：用于存放提前创建好的工作线程
+2. 任务：工作线程需要执行的具体函数
+3. 任务队列：用于存放工作线程需要执行的任务，作为线程池的缓冲机制
+
+线程池的工作原理是：
+
+- 创建线程池的同时事先创建指定数量的工作线程，工作线程在没有任务时阻塞，而不占用 CPU 资源；
+- 当用户向线程池提交任务时，阻塞的工作线程被唤醒，从任务队列里取出一个任务执行；
+- 工作线程执行完手头的任务时，如果队列里还有任务，便直接再取出一个任务执行而不阻塞。
+
 ### 线程池实现
+
+#### 线程池类
+
+我的目标是实现一个可以接受多种类型的任务函数的线程池，如果任务函数包含返回值，通过 std::promise 异步获得其值。
+
+为了简化，整个线程池的实现都包含在 `Threadpool` 类内。有很多线程池的实现喜欢把任务实现为一个伪函数，包装成一个 `Task` 类，*在这里我不这样做*。
+
+```cpp
+#pragma once
+
+#include <condition_variable>
+#include <functional>
+#include <future>
+#include <memory>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <vector>
+
+class Threadpool {
+public:
+    // 创建线程池并启动
+    Threadpool(size_t thread_count = 0);
+    ~Threadpool();
+
+    template <typename F, typename... Args>
+    auto submit(F &&f, Args &&...args) -> std::future<decltype(f(args...))> { ... }
+
+private:
+    std::vector<std::thread> threads;
+    void worker_thread();
+
+    std::queue<std::function<void()>> tasks;
+
+    std::mutex mtx;
+    std::condition_variable cv;
+
+    bool exit_flag;
+};
+```
+
+所有线程被存放在一个 `std::vector` 里，任务存放在 `std::queue` 里，并且这里使用了 `std::function`。定义了互斥锁、条件变量，和一个表示是否应该退出的 flag。工作线程运行的函数 `work_thread` 定义为类的普通成员函数。除了构造和析构函数以外，`Threadpool` 类只暴露了 `submit` 方法，用来接收新任务。`submit` 被定义为模板函数，其实现暂时先省略。
+
+#### 构造函数和析构函数
+
+```cpp
+// 构造函数，接受参数表示线程池内工作线程的数量，默认值为 0
+Threadpool::Threadpool(size_t thread_count) {
+    exit_flag = false;
+    // 如果构造函数传值为 0 或者省略使用默认值，将工作线程数量设置为 CPU 支持的线程数
+    if (thread_count == 0) {
+        thread_count = std::thread::hardware_concurrency();
+    }
+    // 启动指定数量的线程，并保存在 vector 里
+    for (int i = 0; i < thread_count; i++) {
+        // 工作线程运行的函数，注意和任务函数做区分
+        auto thread = std::thread(&Threadpool::worker_thread, this);
+        threads.push_back(std::move(thread));
+    }
+}
+
+// 析构函数
+Threadpool::~Threadpool() {
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        // 设置 flag 为 true
+        exit_flag = true;
+    }
+    // 唤醒线程，检查退出条件
+    cv.notify_all();
+
+    // 等待所有线程结束
+    for (auto &thread : threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+    threads.clear();
+}
+```
+
+#### 工作线程函数
+
+工作线程函数是线程池里工作线程直接运行的函数。注意要将“工作线程函数”和“任务函数”做区分。任务函数是用户希望线程池执行的实际内容，工作线程函数是创建工作线程时直接运行的函数。这俩的关系有点像“应用程序”和“操作系统”的关系。
+
+工作线程函数要做的事情就是：如果任务队列非空，从任务队列里取出一个任务执行，没有任务时阻塞，在线程池修改 flag 为 `true` 时退出执行。
+
+```cpp
+void Threadpool::worker_thread() {
+    std::unique_lock<std::mutex> lock(mtx);
+    // 退出条件：被通知退出，并且任务队列为空
+    while (!exit_flag || (exit_flag && !tasks.empty())) {
+        cv.wait(lock, [&] {
+            // 1. 有新任务 2. 线程池需要退出   被唤醒
+            return exit_flag || !tasks.empty();
+        });
+        // 如果是有新任务
+        if (!tasks.empty()) {
+            auto task = tasks.front();
+            tasks.pop();
+
+            lock.unlock();
+            // 运行任务
+            task();
+            lock.lock();
+        }
+        // 否则是线程池需要退出
+    }
+}
+```
+
+函数里使用的时带谓词的 `wait` 方法，当线程执行完一个任务时，如果此时任务队列非空并且线程池不退出的话，`wait` 方法不阻塞而直接继续执行，从而不需要被唤醒。
+
+#### 提交任务
+
+线程池实现最复杂的是 `submit` 方法。之前说过我的线程池的目标是运行多种类型的任务函数，所以我们要使用函数模板。函数的返回值类型和参数类型、参数数量都是未知的。
+
+```cpp
+template <typename F, typename... Args>
+auto submit(F &&f, Args &&...args) -> std::future<decltype(f(args...))> {
+    std::function<decltype(f(args...))()> func =
+        std::bind(std::forward<F>(f), std::forward<Args>(args)...);
+
+    auto task_ptr =
+        std::make_shared<std::packaged_task<decltype(f(args...))()>>(func);
+
+    std::function<void()> warpper_func = [task_ptr]() { (*task_ptr)(); };
+
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+        tasks.push(warpper_func);
+    }
+
+    cv.notify_one();
+
+    return task_ptr->get_future();
+}
+```
+
+这个方法的实现运用了 C++ 的很多“魔法”。
+
+1. 模板与返回类型
+
+```cpp
+template <typename F, typename... Args>
+auto submit(F &&f, Args &&...args) -> std::future<decltype(f(args...))>
+```
+
+- `F` 是函数对象类型，可以是普通函数、lambda 表达式、成员函数指针等
+- `Args...` 是可变参数模板，表示函数 `f` 的参数类型，可以是任意数量的参数
+- `decltype(f(args...))` 的作用是推导出函数 `f` 的返回类型，并且在这里使用了返回值后置，该方法返回一个 `std::future`，允许异步获得任务返回结果
+
+
+2. 函数绑定
+
+```cpp
+std::function<decltype(f(args...))()> func =
+    std::bind(std::forward<F>(f), std::forward<Args>(args)...);
+```
+
+- `std::bind` 函数将函数和参数提前绑定，稍后可以直接调用
+
+3. 包装任务函数
+
+```cpp
+auto task_ptr = std::make_shared<std::packaged_task<decltype(f(args...))()>>(func);
+```
+
+- 使用 `std::packaged_task` 将任务函数进一步包装，可以稍后直接获得 `std::future` 类型包裹的返回值
+
+4. 进一步封装任务
+
+```cpp
+std::function<void()> warpper_func = [task_ptr]() { (*task_ptr)(); };
+``
+
+- 将任务包装进 `std::function`，便于同一存储到任务队列中
+
+5. 将任务入队
+
+```cpp
+{
+    std::lock_guard<std::mutex> lock(mtx);
+    tasks.push(warpper_func);
+}
+```
+
+6. 条件变量通知阻塞线程
+
+```cpp
+cv.notify_one();
+```
+
+- 唤醒可能的阻塞线程，使其从任务队列里取出任务执行
+
+7. 返回 std::future
+
+```cpp
+return task_ptr->get_future();
+```
+
+至此，一个简单的，支持多种任务类型的线程池就完成了。
 
 ## References
 
@@ -811,3 +1023,5 @@ int main() {
 - [C++ 并发编程](https://paul.pub/cpp-concurrency/)
 
 - [RAII, 维基百科词条](https://zh.wikipedia.org/wiki/RAII)
+
+- [基于C++11实现线程池](https://zhuanlan.zhihu.com/p/367309864)
