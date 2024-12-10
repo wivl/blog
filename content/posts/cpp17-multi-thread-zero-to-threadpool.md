@@ -728,7 +728,7 @@ int main() {
 }
 ```
 
-`std::promise` 往往需要配合 `std::future` 使用。之前使用 `std::async` 的做法是将任务函数返回作为 std::future 获得值的时间点。配对使用 std::future 和 std::promise 使得线程间可以通过赋值进行值的获取。
+`std::promise` 往往需要配合 `std::future` 使用。之前使用 `std::async` 的做法是将任务函数返回作为 `std::future` 获得值的时间点。配对使用 `std::future` 和 `std::promise` 使得线程间可以通过赋值进行值的获取。
 
 在这个例子中，主线程分别定义 `std::promise` 和 `std::future` 对象并绑定。producer 线程通过调用 `std::promise` 的 `set_value()` 方法设置值。consumer 线程通过调用 `std::future` 的 `get()` 方法获得值。
 
@@ -816,7 +816,7 @@ int main() {
 
 #### 线程池类
 
-我的目标是实现一个可以接受多种类型的任务函数的线程池，如果任务函数包含返回值，通过 std::promise 异步获得其值。
+我的目标是实现一个可以接受多种类型的任务函数的线程池，如果任务函数包含返回值，通过 `std::promise` 异步获得其值。
 
 为了简化，整个线程池的实现都包含在 `Threadpool` 类内。有很多线程池的实现喜欢把任务实现为一个伪函数，包装成一个 `Task` 类，*在这里我不这样做*。
 
@@ -987,7 +987,7 @@ auto task_ptr = std::make_shared<std::packaged_task<decltype(f(args...))()>>(fun
 
 ```cpp
 std::function<void()> warpper_func = [task_ptr]() { (*task_ptr)(); };
-``
+```
 
 - 将任务包装进 `std::function`，便于同一存储到任务队列中
 

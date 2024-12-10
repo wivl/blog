@@ -1,6 +1,6 @@
 ---
 title: "构建自己的现代 C++ 工作流程"
-summary: "探讨如何基于 CMake + Conan2 构建高效的 C++ 工作流，包括构建、依赖管理和测试。"
+summary: "探讨如何基于 CMake + Conan2 构建高效的 C++ 工作流，包括构建、依赖管理和测试"
 author: ["wivl"]
 date: 2024-11-16
 tags: ["cpp"]
