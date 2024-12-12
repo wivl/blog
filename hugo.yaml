@@ -1,6 +1,6 @@
 baseURL: https://example.org/
 languageCode: zh-cn
-title: "Wiv Log"
+title: "wivl::blog"
 theme: ["PaperMod"]
 
 menu:
